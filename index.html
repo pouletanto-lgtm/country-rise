@@ -42,7 +42,7 @@
   #board .head .h1 { grid-column:1/3; color:var(--gold); font-weight:900; font-size:calc(18*var(--u)); letter-spacing:1px; }
   #board .head span { text-align:right; }
   #board .head .h1 { text-align:left; }
-  #rows { position:relative; height:calc(52*var(--u)); transition:height .4s; }
+  #rows { position:relative; height:calc(52*var(--u)); transition:height .4s; overflow:hidden; }
   .row { position:absolute; left:0; right:0; height:calc(50*var(--u)); display:grid; align-items:center; gap:calc(8*var(--u));
     grid-template-columns:calc(34*var(--u)) 1fr calc(96*var(--u)) calc(130*var(--u)); padding:0 calc(8*var(--u)); border-radius:calc(10*var(--u));
     transition:transform .6s cubic-bezier(.2,.8,.2,1), background .4s; }

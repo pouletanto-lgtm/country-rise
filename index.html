@@ -252,8 +252,7 @@
     <div><label>Meters per share ↗️</label><input id="sMps" type="number" min="0"></div>
   </div>
   <label>Music volume</label><input id="sVol" type="range" min="0" max="1" step="0.05">
-  <div class="chk"><input type="checkbox" id="sSwitch"> Let players switch country</div>
-  <div class="btns"><button id="bSave">Apply</button><button class="sec" id="bClose">Close</button></div>
+    <div class="btns"><button id="bSave">Apply</button><button class="sec" id="bClose">Close</button></div>
   <div class="btns">
     <button class="sec" id="bRound">New round</button>
     <button class="sec" id="bEnd">End round now</button>
@@ -501,6 +500,46 @@ function levenshtein(a, b) {
   return d[a.length][b.length];
 }
 
+// Tous les pays cités dans un message, dans l'ordre (max 3) : « france maroc 🇵🇭 » -> FR, MA, PH
+function findCountries(message, max = 3) {
+  const raw = String(message || '');
+  const found = [];   // [position, iso]
+  const flagRe = /[\u{1F1E6}-\u{1F1FF}]{2}/gu; let m, fi = 0;
+  while ((m = flagRe.exec(raw))) {
+    let cps = [...m[0]].map(ch => String.fromCharCode(ch.codePointAt(0) - 0x1F1E6 + 65)).join('');
+    if (['GF', 'GP', 'MQ', 'RE', 'YT'].includes(cps)) cps = 'FR';
+    if (COUNTRIES[cps]) found.push([-1000 + fi++, cps]);
+  }
+  const msg = normText(raw);
+  if (msg) {
+    const words = msg.split(' ');
+    const padded = ' ' + msg + ' ';
+    const used = [];
+    for (const { a, iso } of ALIASES) {
+      if (a.length <= 2) { if (msg === a) found.push([0, iso]); continue; }
+      if (a.length === 3 && words.length > 3) continue;
+      let from = 0, at;
+      while ((at = padded.indexOf(' ' + a + ' ', from)) >= 0) {
+        const s = at + 1, e = s + a.length;
+        if (!used.some(([x, y]) => s < y && e > x)) { used.push([s, e]); found.push([s, iso]); }
+        from = at + 1;
+      }
+    }
+    if (!found.length && words.length <= 2 && msg.length >= 5) {
+      let best = null, bestD = 9;
+      for (const { a, iso } of ALIASES) {
+        if (a.length < 5) continue;
+        const d = levenshtein(msg, a), mx = a.length >= 8 ? 2 : 1;
+        if (d <= mx && d < bestD) { best = iso; bestD = d; }
+      }
+      if (best) found.push([0, best]);
+    }
+  }
+  const out = [];
+  for (const [, iso] of found.sort((x, y) => x[0] - y[0])) if (!out.includes(iso)) out.push(iso);
+  return out.slice(0, max);
+}
+
 // Trouve le pays dans un message du tchat (nom, alias, drapeau emoji, petite faute de frappe)
 function findCountry(message) {
   const raw = String(message || '');
@@ -537,7 +576,7 @@ function findCountry(message) {
   return null;
 }
 
-if (typeof module !== 'undefined') module.exports = { COUNTRIES, findCountry, normText };
+if (typeof module !== 'undefined') module.exports = { COUNTRIES, findCountry, findCountries, normText };
 
 </script>
 <script>
@@ -547,7 +586,7 @@ if (typeof module !== 'undefined') module.exports = { COUNTRIES, findCountry, no
 
 // ---------- Texts ----------
 const T = {
-  h1: 'TYPE YOUR COUNTRY IN THE CHAT', h2: 'Every gift makes your country rise! 🚀', timer: 'COUNTRY RISE', board: 'COUNTRIES',
+  h1: 'TYPE YOUR COUNTRY IN THE CHAT', h2: 'Every gift goes to the last country you typed 🚀', timer: 'COUNTRY RISE', board: 'COUNTRIES',
   players: n => `${n} player${n === 1 ? '' : 's'}`, joined: 'joined', type: 'type your country first!', pending: 'on hold',
   winner: 'WINNER', next: s => `Next round in ${s}s`, enter: 'Enter to start now', none: 'No country this round…', mvp: 'MVP',
   scale: 'GIFT SCALE', like: 'like', follow: 'follow', share: 'share',
@@ -573,7 +612,7 @@ const saveCfg = () => store.set(CFG_KEY, CFG);
 const ST_KEY = HOSTED ? 'cr2_state_web' : 'cr2_state';
 const blank = () => ({ phase: 'play', remaining: CFG.dur * 60, paused: false, players: {}, scores: {}, contrib: {}, wins: {}, round: 1 });
 let S = Object.assign(blank(), store.get(ST_KEY) || {});
-if (S.phase !== 'play') { S.phase = 'play'; S.scores = {}; S.contrib = {}; S.remaining = CFG.dur * 60; }
+if (S.phase !== 'play') { S.phase = 'play'; S.scores = {}; S.contrib = {}; S.players = {}; S.remaining = CFG.dur * 60; }
 const pending = {};
 let carry = [], dirty = false;
 const save = () => { dirty = true; };
@@ -856,8 +895,10 @@ function pin(iso, u, what) {
 }
 
 // ---------- Leaderboard ----------
-function countByIso() { const c = {}; for (const p of Object.values(S.players)) c[p.iso] = (c[p.iso] || 0) + 1; return c; }
-function playersOf(iso) { return Object.entries(S.players).filter(([, p]) => p.iso === iso).map(([uid, p]) => Object.assign({ uid }, p)); }
+const isosOf = p => p.isos || [p.iso];
+function countByIso() { const c = {}; for (const p of Object.values(S.players)) for (const i of isosOf(p)) c[i] = (c[i] || 0) + 1; return c; }
+function playersOf(iso) { return Object.entries(S.players).filter(([, p]) => isosOf(p).includes(iso)).map(([uid, p]) => Object.assign({ uid }, p)); }
+const ck = (uid, iso) => uid + '|' + iso;
 function ranked() {
   const counts = countByIso();
   const isos = new Set([...Object.keys(S.scores).filter(k => S.scores[k] > 0), ...Object.keys(counts)]);
@@ -931,10 +972,14 @@ function renderLegend() {
 
 // ---------- Game logic ----------
 function join(u, iso) {
-  const p = S.players[u.uid];
-  if (p && p.iso === iso) { p.nick = u.nick; if (u.pic) p.pic = u.pic; return; }
-  if (p && !CFG.allowSwitch) return;
-  S.players[u.uid] = { nick: u.nick, pic: u.pic || (p && p.pic) || '', iso };
+  let p = S.players[u.uid];
+  if (!p) p = S.players[u.uid] = { nick: u.nick, pic: u.pic || '', iso, isos: [] };
+  p.nick = u.nick || p.nick; if (u.pic) p.pic = u.pic;
+  if (!p.isos) p.isos = [p.iso];
+  const isNew = !p.isos.includes(iso);
+  p.iso = iso;                       // gifts go to the last country the viewer typed
+  if (!isNew) { save(); return; }
+  p.isos.push(iso);
   feed(`${av(u)}<span class="txt"><b>${esc(u.nick)}</b> ${T.joined} ${flag(iso)} <span class="c">${esc(cname(iso))}</span></span>`);
   pin(iso, u, `${T.joined} ${flag(iso)} ${esc(cname(iso))}!`);
   wantFocus(iso, 1);
@@ -953,7 +998,7 @@ function addMeters(u, meters, kind, gift) {
   const iso = p.iso;
   if (u.pic) p.pic = u.pic; p.nick = u.nick || p.nick;
   S.scores[iso] = (S.scores[iso] || 0) + meters;
-  S.contrib[u.uid] = (S.contrib[u.uid] || 0) + meters;
+  S.contrib[ck(u.uid, iso)] = (S.contrib[ck(u.uid, iso)] || 0) + meters;
   const icon = kind === 'gift' ? `<span class="fe">${giftEmoji(gift || {})}</span>${gift && gift.count > 1 ? ' ×' + gift.count : ''}` :
     kind === 'like' ? '<span class="fe">❤️</span>' : kind === 'follow' ? '<span class="fe">➕</span>' : kind === 'share' ? '<span class="fe">↗️</span>' : '→';
   feed(`${av(u)}<span class="txt"><b>${esc(u.nick)}</b> ${icon} ${flag(iso)} <span class="c">${esc(cname(iso))}</span> <span class="p">+${fmt(meters)}</span></span>`);
@@ -990,8 +1035,8 @@ function handle(ev, d) {
   ev = String(ev || '').toLowerCase();
   const u = normUser(d);
   if (ev === 'chat' || ev === 'comment') {
-    const iso = findCountry(d.comment || d.content || d.text || '');
-    if (iso) join(u, iso);
+    const isos = findCountries(d.comment || d.content || d.text || '');
+    isos.forEach(iso => join(u, iso));
   } else if (ev === 'gift') {
     const gd = d.giftDetails || d.gift || {};
     const type = d.giftType != null ? d.giftType : gd.giftType;
@@ -1029,10 +1074,10 @@ function endRound() {
   if (!list.length) { Wn.innerHTML = `<div class="card"><div class="ttl">${T.none}</div><div class="foot" id="wfoot"></div></div>`; Wn.classList.add('on'); tickWinner(); return; }
   const w = list[0];
   S.wins[w.iso] = (S.wins[w.iso] || 0) + 1;
-  const sortP = iso => playersOf(iso).sort((a, b) => (S.contrib[b.uid] || 0) - (S.contrib[a.uid] || 0));
+  const sortP = iso => playersOf(iso).sort((a, b) => (S.contrib[ck(b.uid, iso)] || 0) - (S.contrib[ck(a.uid, iso)] || 0));
   const wp = sortP(w.iso);
   const NT = PH ? 5 : 7;
-  const top = wp.slice(0, NT).map((p, i) => `<div class="pp ${i === 0 ? 'mvp' : ''}">${i === 0 ? `<em>👑 ${T.mvp}</em>` : ''}${av(p)}<b>${esc(p.nick)}</b><i>+${fmt(S.contrib[p.uid] || 0)}</i></div>`).join('') +
+  const top = wp.slice(0, NT).map((p, i) => `<div class="pp ${i === 0 ? 'mvp' : ''}">${i === 0 ? `<em>👑 ${T.mvp}</em>` : ''}${av(p)}<b>${esc(p.nick)}</b><i>+${fmt(S.contrib[ck(p.uid, w.iso)] || 0)}</i></div>`).join('') +
     (wp.length > NT ? `<span class="more">+${wp.length - NT}</span>` : '');
   const NS = PH ? 8 : 14;
   const small = iso => { const ps = sortP(iso); return ps.slice(0, NS).map(p => av(p)).join('') + (ps.length > NS ? `<span class="more">+${ps.length - NS}</span>` : ''); };
@@ -1052,7 +1097,8 @@ function endRound() {
 }
 function tickWinner() { const f = $('wfoot'); if (f) f.textContent = `${T.next(Math.max(0, Math.ceil(winnerLeft)))}  ·  ${T.enter}`; }
 function startRound() {
-  S.phase = 'play'; S.scores = {}; S.contrib = {}; S.remaining = CFG.dur * 60; S.round++;
+  S.phase = 'play'; S.scores = {}; S.contrib = {}; S.players = {}; S.remaining = CFG.dur * 60; S.round++;
+  for (const k in pending) delete pending[k];
   $('winner').classList.remove('on'); stopConfetti();
   Object.keys(rowEls).forEach(k => { rowEls[k].remove(); delete rowEls[k]; });
   renderBoard(); refreshTags(); worldView(); camBusy = Date.now() + 3000;
@@ -1186,7 +1232,7 @@ function showGroups() { const v = $('sSource').value; $('gWs').classList.toggle(
 $('sSource').onchange = showGroups;
 function openSettings() {
   for (const [id, k] of Object.entries(fields)) $(id).value = CFG[k];
-  $('sSwitch').checked = !!CFG.allowSwitch; showGroups();
+  showGroups();
   $('settings').classList.add('on');
 }
 $('gear').onclick = openSettings;
@@ -1195,7 +1241,7 @@ $('sVol').oninput = () => { music.volume = +$('sVol').value; };
 $('bSave').onclick = () => {
   const old = Object.assign({}, CFG);
   for (const [id, k] of Object.entries(fields)) { const v = $(id).value; CFG[k] = typeof DEFAULTS[k] === 'number' ? (v === '' || isNaN(+v) ? DEFAULTS[k] : +v) : v.trim(); }
-  CFG.allowSwitch = $('sSwitch').checked; saveCfg();
+  saveCfg();
   if (old.dur !== CFG.dur && S.phase === 'play') S.remaining = Math.max(1, S.remaining + (CFG.dur - old.dur) * 60);
   if (old.source !== CFG.source || old.ws !== CFG.ws || old.user !== CFG.user || old.key !== CFG.key) connect();
   music.volume = CFG.vol; renderLegend(); renderBoard(); $('settings').classList.remove('on');
